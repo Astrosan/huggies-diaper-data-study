@@ -1,0 +1,1 @@
+The repository contains all SAS codes and a final report capturing the insights and suggestions for a diaper Brand Manager. The work has been done as part of an analytics project
