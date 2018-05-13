@@ -1,0 +1,303 @@
+
+********************************** Price Elasticity **********************************;
+
+/*data loading*/
+
+data scanner_data_drug_store(drop=COLUPC_char len_vend len_item);
+infile 'H:\Project\diapers\diapers_drug_1114_1165' firstobs=2;
+input IRI_KEY WEEK SY $ GE $ VEND $ ITEM $ UNITS DOLLARS  F $ D PR;
+format COLUPC_char $13. COLUPC 13.;
+len_item = length(ITEM);
+len_vend = length(VEND);
+if  len_vend < 5 then VEND = trim(repeat('0',5-len_vend-1)||VEND);
+if  len_item < 5 then ITEM = trim(repeat('0',5-len_item-1)||ITEM);
+COLUPC_char = compress(CATT(trim(SY),trim(GE),trim(VEND),trim(ITEM)));
+COLUPC = COLUPC_char*1;
+run;
+
+data scanner_data_grocery_store(drop=COLUPC_char len_vend len_item);
+infile 'H:\Project\diapers\diapers_groc_1114_1165' firstobs=2;
+input IRI_KEY WEEK SY $ GE $ VEND $ ITEM $ UNITS DOLLARS  F $ D PR;
+format COLUPC_char $13. COLUPC 13.;
+len_item = length(ITEM);
+len_vend = length(VEND);
+if  len_vend < 5 then VEND = trim(repeat('0',5-len_vend-1)||VEND);
+if  len_item < 5 then ITEM = trim(repeat('0',5-len_item-1)||ITEM);
+COLUPC_char = compress(CATT(trim(SY),trim(GE),trim(VEND),trim(ITEM)));
+COLUPC = COLUPC_char*1;
+run;
+
+data delivery_stores;
+infile 'H:\Project\diapers\Delivery_Stores' firstobs=2 expandtabs;
+input IRI_KEY   	1-7
+	  OU      	  $ 9-10
+	  EST_ACV   	11-19
+	  Market_Name $ 20-42
+	  Open			42-49
+	  Clsd 			50-54
+	  MskdName    $ 55-63;
+OU = strip(OU);
+Market_Name = strip(Market_Name);
+MskdName = compress(MskdName);
+run;
+
+data diaper_detail(keep= L4 L5 PRODUCT_TYPE STAGE SCENT WT_BABY COLOR THICKNESS USER_INFO VOL_EQ COLUPC);
+infile 'H:\Project\diapers\prod_diapers.csv' firstobs=2 DLM= ',' DSD MISSOVER;
+length L1 $33. L2 $17. L3 $28. L4 $28. L5 $29. L9 $32. SY $2. GE $1. VEND $5. ITEM $5.
+	  UPC $17. specification $80. PRODUCT_TYPE $19. STAGE $15. SCENT $12. WT_BABY $20. COLOR $20. THICKNESS $19. USER_INFO $12.;
+input L1 $ L2 $ L3 $ L4 $ L5 $ L9 $ 
+	  Level UPC $ SY $ GE $ VEND $ ITEM $ 
+	  specification $ VOL_EQ PRODUCT_TYPE $ STAGE $ SCENT $ WT_BABY $ COLOR $ THICKNESS $ USER_INFO $;
+
+L1 = strip(L1);
+L2 = strip(L2);
+L3 = strip(L3);
+L4 = strip(L4);
+L5 = strip(L5);
+L9 = strip(L9);
+UPC = strip(UPC);
+specification = strip(specification);
+PRODUCT_TYPE = strip(PRODUCT_TYPE);
+STAGE= strip(STAGE);
+SCENT = strip(SCENT);
+WT_BABY = strip(WT_BABY);
+COLOR = strip(COLOR);
+THICKNESS = strip(THICKNESS);
+USER_INFO = strip(USER_INFO);
+
+format COLUPC_char $13. COLUPC 13.;
+len_item = length(ITEM);
+len_vend = length(VEND);
+if  len_vend < 5 then VEND = trim(repeat('0',5-len_vend-1)||VEND);
+if  len_item < 5 then ITEM = trim(repeat('0',5-len_item-1)||ITEM);
+COLUPC_char = compress(CATT(trim(SY),trim(GE),trim(VEND),trim(ITEM)));
+COLUPC = COLUPC_char*1;
+run;
+
+
+
+**********************************************************************************************;
+**************************************** Sales-data ******************************************;
+proc sort data=Delivery_stores dupout = dups nodupkey;
+by IRI_KEY;
+run;
+
+proc sql;
+create table stores_details as
+select * from Delivery_stores
+where IRI_KEY not in (select distinct IRI_KEY from dups)
+order by IRI_KEY;
+quit;
+
+data scanner_data;
+set Scanner_data_drug_store
+	Scanner_data_grocery_store; 
+run;
+
+proc sql;
+create table sales_data as
+select
+a.IRI_KEY, a.WEEK, a.UNITS, a.DOLLARS, a.F, a.D, a.PR,
+b.*,
+c.OU, c.Market_Name, c.MskdName,
+
+((a.DOLLARS/a.UNITS)/b.VOL_EQ) as DOLLARS_PER_DIAPER,
+
+case 
+	when a.D in (1,2) then 1
+	else 0 end as disp,
+
+case
+	when a.F not in ('NONE') then 1
+	else 0 end as Feature,
+
+case
+	when b.L5 in ('HUGGIES','HUGGIES BABY SHAPED','HUGGIES BABY STEPS','HUGGIES CONVERTIBLES','HUGGIES FOR HER','HUGGIES OVERNITES','HUGGIES SUPREME',
+				  'HUGGIES SUPREME BABY SHAPED','HUGGIES SUPREME GENTLE CARE','HUGGIES ULTRATRIM','HUGGIES ULTRATRIM BABY STEPS') then 'HUGGIES'
+	when b.L5 in ('LUVS','LUVS PHASES','LUVS STRETCH','LUVS ULTRA LEAKGUARDS','LUVS ULTRA LEAKGUARDS STRETCH') then 'LUVS'
+	when b.L5 in ('PAMPERS','PAMPERS BABY DRY','PAMPERS BABY DRY STRETCH','PAMPERS CRUISERS','PAMPERS PHASES','PAMPERS PREMIUM','PAMPERS RASH CARE',
+				  'PAMPERS RASH GUARD','PAMPERS STRETCH','PAMPERS SWADDLERS') then 'PAMPERS'
+	else 'OTHER' end as brand
+
+from scanner_data a
+inner join diaper_detail b   on a.colupc  = b.colupc
+inner join stores_details c on a.IRI_KEY = c.IRI_KEY
+where b.PRODUCT_TYPE = 'DISPOSABLE DIAPER'
+order by a.IRI_KEY, a.week, b.L4, b.L5, b.COLUPC;
+quit;
+
+proc sql;
+create table sales_data as
+select a.*, b.tot_units
+from sales_data a 
+inner join (select IRI_KEY, week, brand,sum(UNITS) as tot_units
+			from sales_data
+			group by IRI_KEY, week, brand) b 
+on a.IRI_KEY = b.IRI_KEY and a.week = b.week and a.brand = b.brand;
+quit;
+
+/*Create weighted variables*/
+
+data sales_data;
+retain IRI_KEY week brand L4 L5 COLUPC DOLLARS_PER_DIAPER wt_price_diaper units tot_units PR PR_wt D disp_wt F Feature Feature_wt;
+set sales_data;
+format PR_wt 4.2 disp_wt 4.2 Feature_wt 4.2 DOLLARS_PER_DIAPER 4.2 wt_price_diaper 4.2;
+wt_price_diaper = DOLLARS_PER_DIAPER*units/tot_units;
+PR_wt = PR*units/tot_units;
+disp_wt = disp*units/tot_units;
+Feature_wt = Feature*units/tot_units;
+run;
+
+proc sql;
+create table sales_brandwise as
+select IRI_KEY, week, brand,
+sum(wt_price_diaper) as tot_wt_brand_price,
+sum(PR_wt) as tot_PR_wt, 
+sum(disp_wt) as tot_disp_wt, 
+sum(Feature_wt) as tot_Feature_wt
+from sales_data
+group by IRI_KEY, week, brand
+order by 1,2,3;
+quit;
+
+/*remove stores which were not open all weeks */
+/*select only those stores that have sales of all 4 brands */
+proc sql;
+create table iri_lt4_brands as 
+select iri_key, week, count(*) as cnt from sales_brandwise group by 1,2 having cnt < 4;
+quit;
+
+proc sql;
+create table iri_weeks as 
+select distinct iri_key, week from sales_brandwise where iri_key not in (select distinct iri_key from iri_lt4_brands)
+order by 1,2;
+quit;
+
+data iri_weeks;
+set iri_weeks;
+retain week1;
+by IRI_KEY;
+id = 1;
+if first.IRI_KEY then do;
+	week1 = 0;
+	id = 0;
+end;
+diff= week - week1;
+week1 = week;
+run;
+
+proc sql;
+create table iri_allweek as
+select IRI_KEY, sum(diff) as sum, count(distinct week) as cnt from iri_weeks where id =1
+group by 1;
+quit;
+
+data iri_allweek;
+set iri_allweek;
+miss = (sum=cnt);
+run;
+
+proc sql;
+create table sales_brandwise_allweek as
+select * from sales_brandwise where IRI_KEY in (select distinct IRI_KEY from iri_allweek where miss=1)
+order by IRI_KEY, week ;
+quit;
+
+/*create seperate datasets for each brand */
+
+data brand1 brand2 brand3 brand4;
+set sales_brandwise_allweek;
+if brand = 'HUGGIES' then output brand1;
+else if brand = 'LUVS' then output brand2;
+else if brand = 'PAMPERS' then output brand3;
+else output brand4;
+run;
+
+/*create a weekly storewise dataset with all brand prices and features kept columnwise */
+proc sql;
+create table all_brand_wt_price as
+select
+a.IRI_KEY, a.week,
+
+a.tot_wt_brand_price as wt_price_brand1,
+a.tot_PR_wt as PR_wt_brand1,
+a.tot_disp_wt as disp_wt_brand1,
+a.tot_Feature_wt as Feature_wt_brand1,
+
+b.tot_wt_brand_price as wt_price_brand2,
+b.tot_PR_wt as PR_wt_brand2,
+b.tot_disp_wt as disp_wt_brand2,
+b.tot_Feature_wt as Feature_wt_brand2,
+
+c.tot_wt_brand_price as wt_price_brand3,
+c.tot_PR_wt as PR_wt_brand3,
+c.tot_disp_wt as disp_wt_brand3,
+c.tot_Feature_wt as Feature_wt_brand3,
+
+d.tot_wt_brand_price as wt_price_brand4,
+d.tot_PR_wt as PR_wt_brand4,
+d.tot_disp_wt as disp_wt_brand4,
+d.tot_Feature_wt as Feature_wt_brand4
+
+from brand1 a 
+inner join brand2 b on a.IRI_KEY = b.IRI_KEY and a.week = b.week
+inner join brand3 c on a.IRI_KEY = c.IRI_KEY and a.week = c.week
+inner join brand4 d on a.IRI_KEY = d.IRI_KEY and a.week = d.week
+order by a.IRI_KEY, a.week;
+quit;
+
+/*add sales information to the price-dataset and do panel regression */
+
+%macro brands(brand,brand_num);
+proc sql;
+create table brand_&brand_num. as
+select 
+b.*,
+
+b.wt_price_brand1*b.PR_wt_brand1 as price_PR1,
+b.wt_price_brand2*b.PR_wt_brand1 as price_PR2,
+b.wt_price_brand3*b.PR_wt_brand1 as price_PR3,
+b.wt_price_brand4*b.PR_wt_brand1 as price_PR4,
+
+b.wt_price_brand1*b.Feature_wt_brand1 as price_F1,
+b.wt_price_brand2*b.Feature_wt_brand2 as price_F2,
+b.wt_price_brand3*b.Feature_wt_brand3 as price_F3,
+b.wt_price_brand4*b.Feature_wt_brand3 as price_F4,
+
+b.PR_wt_brand1*b.Feature_wt_brand1 as PR_F1,
+b.PR_wt_brand2*b.Feature_wt_brand2 as PR_F2,
+b.PR_wt_brand3*b.Feature_wt_brand3 as PR_F3,
+b.PR_wt_brand4*b.Feature_wt_brand3 as PR_F4,
+
+case when a.tot_units is null then 0
+else a.tot_units end as tot_units
+
+from all_brand_wt_price b
+inner join (select IRI_KEY, week, brand,sum(UNITS) as tot_units
+			from sales_data
+			where brand = &brand.
+			group by IRI_KEY, week, brand ) a
+on a.IRI_KEY = b.IRI_KEY and a.week = b.week
+order by IRI_KEY, week;
+quit;
+
+proc panel data=brand_&brand_num.;
+model tot_units =   wt_price_brand1 wt_price_brand2 wt_price_brand3 wt_price_brand4
+					disp_wt_brand1 disp_wt_brand2 disp_wt_brand3 disp_wt_brand4
+					Feature_wt_brand1 Feature_wt_brand2 Feature_wt_brand3 Feature_wt_brand4
+					PR_wt_brand1 PR_wt_brand2 PR_wt_brand3 PR_wt_brand4
+
+					price_PR1 price_PR2 price_PR3 price_PR4
+					price_F1 price_F2 price_F3 price_F4
+					PR_F1 PR_F2 PR_F3 PR_F4
+				    / fixtwo vcomp=fb plots=none;
+id IRI_KEY week;
+run;
+
+%mend;
+%brands('HUGGIES',1);
+%brands('LUVS',2);
+%brands('PAMPERS',3);
+%brands('OTHER',4);
+
+**********************************************************************************************;

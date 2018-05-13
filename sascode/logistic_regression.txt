@@ -1,0 +1,411 @@
+libname proj 'H:\Project\diapers';
+/******* Import Store Level Data ***************/
+data scanner_data_drug_store(drop=COLUPC_char len_vend len_item);
+infile 'H:\Project\diapers\diapers_drug_1114_1165' firstobs=2;
+input IRI_KEY WEEK SY $ GE $ VEND $ ITEM $ UNITS DOLLARS  F $ D PR;
+format COLUPC_char $13. COLUPC 13.;
+len_item = length(ITEM);
+len_vend = length(VEND);
+if  len_vend < 5 then VEND = trim(repeat('0',5-len_vend-1)||VEND);
+if  len_item < 5 then ITEM = trim(repeat('0',5-len_item-1)||ITEM);
+COLUPC_char = compress(CATT(trim(SY),trim(GE),trim(VEND),trim(ITEM)));
+COLUPC = COLUPC_char*1;
+run;
+
+data scanner_data_grocery_store(drop=COLUPC_char len_vend len_item);
+infile 'H:\Project\diapers\diapers_groc_1114_1165' firstobs=2;
+input IRI_KEY WEEK SY $ GE $ VEND $ ITEM $ UNITS DOLLARS  F $ D PR;
+format COLUPC_char $13. COLUPC 13.;
+len_item = length(ITEM);
+len_vend = length(VEND);
+if  len_vend < 5 then VEND = trim(repeat('0',5-len_vend-1)||VEND);
+if  len_item < 5 then ITEM = trim(repeat('0',5-len_item-1)||ITEM);
+COLUPC_char = compress(CATT(trim(SY),trim(GE),trim(VEND),trim(ITEM)));
+COLUPC = COLUPC_char*1;
+run;
+/******* Import Delivery Store Data ***************/
+data delivery_stores;
+infile 'H:\Project\diapers\Delivery_Stores' firstobs=2 expandtabs;
+input IRI_KEY   	1-7
+	  OU      	  $ 9-10
+	  EST_ACV   	11-19
+	  Market_Name $ 20-42
+	  Open			42-49
+	  Clsd 			50-54
+	  MskdName    $ 55-63;
+OU = strip(OU);
+Market_Name = strip(Market_Name);
+MskdName = compress(MskdName);
+run;
+/******* Import Product Level Data ***************/
+data diaper_detail(keep= L4 L5 PRODUCT_TYPE STAGE SCENT WT_BABY COLOR THICKNESS USER_INFO VOL_EQ COLUPC);
+infile 'H:\Project\diapers\prod_diapers.csv' firstobs=2 DLM= ',' DSD MISSOVER;
+length L1 $33. L2 $17. L3 $28. L4 $28. L5 $29. L9 $32. SY $2. GE $1. VEND $5. ITEM $5.
+	  UPC $17. specification $80. PRODUCT_TYPE $19. STAGE $15. SCENT $12. WT_BABY $20. COLOR $20. THICKNESS $19. USER_INFO $12.;
+input L1 $ L2 $ L3 $ L4 $ L5 $ L9 $ 
+	  Level UPC $ SY $ GE $ VEND $ ITEM $ 
+	  specification $ VOL_EQ PRODUCT_TYPE $ STAGE $ SCENT $ WT_BABY $ COLOR $ THICKNESS $ USER_INFO $;
+
+L1 = strip(L1);
+L2 = strip(L2);
+L3 = strip(L3);
+L4 = strip(L4);
+L5 = strip(L5);
+L9 = strip(L9);
+UPC = strip(UPC);
+specification = strip(specification);
+PRODUCT_TYPE = strip(PRODUCT_TYPE);
+STAGE= strip(STAGE);
+SCENT = strip(SCENT);
+WT_BABY = strip(WT_BABY);
+COLOR = strip(COLOR);
+THICKNESS = strip(THICKNESS);
+USER_INFO = strip(USER_INFO);
+
+format COLUPC_char $13. COLUPC 13.;
+len_item = length(ITEM);
+len_vend = length(VEND);
+if  len_vend < 5 then VEND = trim(repeat('0',5-len_vend-1)||VEND);
+if  len_item < 5 then ITEM = trim(repeat('0',5-len_item-1)||ITEM);
+COLUPC_char = compress(CATT(trim(SY),trim(GE),trim(VEND),trim(ITEM)));
+COLUPC = COLUPC_char*1;
+run;
+
+**********************************************************************************************;
+**************************************** Sales-data ******************************************;
+proc sort data=Delivery_stores dupout = dups nodupkey;
+by IRI_KEY;
+run;
+
+proc sql;
+create table stores_details as
+select * from Delivery_stores
+where IRI_KEY not in (select distinct IRI_KEY from dups)
+order by IRI_KEY;
+quit;
+/******* Complete Store Data ***************/
+data scanner_data;
+set Scanner_data_drug_store
+	Scanner_data_grocery_store; 
+run;
+/******* Join Store, Store Detail and Product Detail datasets ***************/
+proc sql;
+create table sales_data as
+select
+a.IRI_KEY, a.WEEK, a.UNITS, a.DOLLARS, a.F, a.D, a.PR,
+b.*,
+c.OU, c.Market_Name, c.MskdName,
+
+((a.DOLLARS/a.UNITS)/b.VOL_EQ) as DOLLARS_PER_DIAPER,
+
+case 
+	when a.D in (1,2) then 1
+	else 0 end as disp,
+
+case
+	when a.F not in ('NONE') then 1
+	else 0 end as Feature,
+
+case
+	when b.L5 in ('HUGGIES','HUGGIES BABY SHAPED','HUGGIES BABY STEPS','HUGGIES CONVERTIBLES','HUGGIES FOR HER','HUGGIES OVERNITES','HUGGIES SUPREME',
+				  'HUGGIES SUPREME BABY SHAPED','HUGGIES SUPREME GENTLE CARE','HUGGIES ULTRATRIM','HUGGIES ULTRATRIM BABY STEPS') then 'HUGGIES'
+	when b.L5 in ('LUVS','LUVS PHASES','LUVS STRETCH','LUVS ULTRA LEAKGUARDS','LUVS ULTRA LEAKGUARDS STRETCH') then 'LUVS'
+	when b.L5 in ('PAMPERS','PAMPERS BABY DRY','PAMPERS BABY DRY STRETCH','PAMPERS CRUISERS','PAMPERS PHASES','PAMPERS PREMIUM','PAMPERS RASH CARE',
+				  'PAMPERS RASH GUARD','PAMPERS STRETCH','PAMPERS SWADDLERS') then 'PAMPERS'
+	else 'OTHER' end as brand
+
+from scanner_data a
+inner join diaper_detail b   on a.colupc  = b.colupc
+inner join stores_details c on a.IRI_KEY = c.IRI_KEY
+where b.PRODUCT_TYPE = 'DISPOSABLE DIAPER'
+order by a.IRI_KEY, a.week, b.L4, b.L5, b.COLUPC;
+quit;
+/******* Calculate Weighted Price, Weighted Feature, Weighted Promotion ***************/
+proc sql;
+create table sales_data as
+select a.*, b.tot_units
+from sales_data a 
+inner join (select IRI_KEY, week, brand,sum(UNITS) as tot_units
+			from sales_data
+			group by IRI_KEY, week, brand) b 
+on a.IRI_KEY = b.IRI_KEY and a.week = b.week and a.brand = b.brand;
+quit;
+
+data sales_data;
+retain IRI_KEY week brand L4 L5 COLUPC DOLLARS_PER_DIAPER wt_price_diaper units tot_units PR PR_wt D disp_wt F Feature Feature_wt;
+set sales_data;
+format PR_wt 4.2 disp_wt 4.2 Feature_wt 4.2 DOLLARS_PER_DIAPER 4.2 wt_price_diaper 4.2;
+wt_price_diaper = DOLLARS_PER_DIAPER*units/tot_units;
+PR_wt = PR*units/tot_units;
+disp_wt = disp*units/tot_units;
+Feature_wt = Feature*units/tot_units;
+run;
+
+proc sql;
+create table sales_brandwise as
+select IRI_KEY, week, brand,
+sum(wt_price_diaper) as tot_wt_brand_price,
+sum(PR_wt) as tot_PR_wt, 
+sum(disp_wt) as tot_disp_wt, 
+sum(Feature_wt) as tot_Feature_wt
+from sales_data
+group by IRI_KEY, week, brand
+order by 1,2,3;
+quit;
+
+proc sql;
+create table iri_lt4_brands as 
+select iri_key, week, count(*) as cnt from sales_brandwise group by 1,2 having cnt < 4;
+quit;
+
+proc sql;
+create table iri_weeks as 
+select distinct iri_key, week from sales_brandwise where iri_key not in (select distinct iri_key from iri_lt4_brands)
+order by 1,2;
+quit;
+
+data iri_weeks;
+set iri_weeks;
+retain week1;
+by IRI_KEY;
+id = 1;
+if first.IRI_KEY then do;
+	week1 = 0;
+	id = 0;
+end;
+diff= week - week1;
+week1 = week;
+run;
+
+proc sql;
+create table iri_allweek as
+select IRI_KEY, sum(diff) as sum, count(distinct week) as cnt from iri_weeks where id =1
+group by 1;
+quit;
+
+data iri_allweek;
+set iri_allweek;
+miss = (sum=cnt);
+run;
+
+proc sql;
+create table sales_brandwise_allweek as
+select * from sales_brandwise where IRI_KEY in (select distinct IRI_KEY from iri_allweek where miss=1)
+order by IRI_KEY, week ;
+quit;
+
+data brand1 brand2 brand3 brand4;
+set sales_brandwise_allweek;
+if brand = 'HUGGIES' then output brand1;
+else if brand = 'LUVS' then output brand2;
+else if brand = 'PAMPERS' then output brand3;
+else output brand4;
+run;
+
+proc sql;
+create table all_brand_wt_price as
+select
+a.IRI_KEY, a.week,
+
+a.tot_wt_brand_price as wt_price_brand1,
+a.tot_PR_wt as PR_wt_brand1,
+a.tot_disp_wt as disp_wt_brand1,
+a.tot_Feature_wt as Feature_wt_brand1,
+
+b.tot_wt_brand_price as wt_price_brand2,
+b.tot_PR_wt as PR_wt_brand2,
+b.tot_disp_wt as disp_wt_brand2,
+b.tot_Feature_wt as Feature_wt_brand2,
+
+c.tot_wt_brand_price as wt_price_brand3,
+c.tot_PR_wt as PR_wt_brand3,
+c.tot_disp_wt as disp_wt_brand3,
+c.tot_Feature_wt as Feature_wt_brand3,
+
+d.tot_wt_brand_price as wt_price_brand4,
+d.tot_PR_wt as PR_wt_brand4,
+d.tot_disp_wt as disp_wt_brand4,
+d.tot_Feature_wt as Feature_wt_brand4
+
+from brand1 a 
+inner join brand2 b on a.IRI_KEY = b.IRI_KEY and a.week = b.week
+inner join brand3 c on a.IRI_KEY = c.IRI_KEY and a.week = c.week
+inner join brand4 d on a.IRI_KEY = d.IRI_KEY and a.week = d.week
+order by a.IRI_KEY, a.week;
+quit;
+
+/******* Import Panel Level Data ***************/
+
+data panel_data_DR;
+infile 'H:\Project\diapers\diapers_PANEL_DR_1114_1165.dat' firstobs=2 expandtabs;
+input PANID	WEEK UNITS OUTLET $ DOLLARS IRI_KEY COLUPC;
+format COLUPC 13.;
+run;
+
+data panel_data_GR;
+infile 'H:\Project\diapers\diapers_PANEL_GR_1114_1165.dat' firstobs=2 expandtabs;
+input PANID	WEEK UNITS OUTLET $ DOLLARS IRI_KEY COLUPC;
+format COLUPC 13.;
+run;
+
+data panel_data_MA;
+infile 'H:\Project\diapers\diapers_PANEL_MA_1114_1165.dat' firstobs=2 expandtabs;
+input PANID	WEEK UNITS OUTLET $ DOLLARS IRI_KEY COLUPC;
+format COLUPC 13.;
+run;
+
+/******* Import Customer Details Data ***************/
+data panel_details;
+infile 'H:\Project\diapers\ads demo1.csv' firstobs=2 DLM=',' DSD MISSOVER;
+input PANID panel_churn pre_tax_inc fam_size HH_RACE Home_type COUNTY $ AGE EDU OCC 
+	  Age_Male_head EDU_male_head OCC_male_head Male_work_hr Male_smoke 
+	  Age_Female_head EDU_Female_head OCC_Female_head Female_work_hr Female_smoke
+	  Dogs Cats Children_age_grp Marital_Status Language TV Cable_TV Year HISP_FLAG
+      HISP_CAT Race2 RACE3 Microwave ZIPCODE FIPSCODE market_zipcode 
+	  IRI_Geo_num EXT_FACT;
+run;
+/******* Merge All Panel Level Data ***************/
+data all_panel_data;
+set panel_data_DR
+	panel_data_GR
+	panel_data_MA;
+run;
+
+proc sql;
+create table panel_diaper_details as
+select
+a.*,
+b.vol_eq,
+b.L4,
+case
+	when b.L5 in ('HUGGIES','HUGGIES BABY SHAPED','HUGGIES BABY STEPS','HUGGIES CONVERTIBLES','HUGGIES FOR HER','HUGGIES OVERNITES','HUGGIES SUPREME',
+				  'HUGGIES SUPREME BABY SHAPED','HUGGIES SUPREME GENTLE CARE','HUGGIES ULTRATRIM','HUGGIES ULTRATRIM BABY STEPS') then 'HUGGIES'
+	when b.L5 in ('LUVS','LUVS PHASES','LUVS STRETCH','LUVS ULTRA LEAKGUARDS','LUVS ULTRA LEAKGUARDS STRETCH') then 'LUVS'
+	when b.L5 in ('PAMPERS','PAMPERS BABY DRY','PAMPERS BABY DRY STRETCH','PAMPERS CRUISERS','PAMPERS PHASES','PAMPERS PREMIUM','PAMPERS RASH CARE',
+				  'PAMPERS RASH GUARD','PAMPERS STRETCH','PAMPERS SWADDLERS') then 'PAMPERS'
+	else 'OTHER' end as brand
+from all_panel_data a
+inner join diaper_detail b on a.COLUPC = b.COLUPC
+where b.PRODUCT_TYPE = 'DISPOSABLE DIAPER';
+quit;
+
+proc sql;
+create table brand_choice_store_features as
+select
+a.*,
+b.*
+from panel_diaper_details a
+inner join All_brand_wt_price b 
+on a.iri_key = b.iri_key and a.week = b.week
+order by a.panid, a.week;
+quit;
+
+data brand_choice_store_features;
+set brand_choice_store_features(drop= outlet dollars iri_key colupc L4);
+if brand = 'HUGGIES' then brand_id = 1;
+else if brand = 'LUVS' then brand_id = 2;
+else if brand = 'PAMPERS' then brand_id = 3;
+else brand_id = 4;
+run;
+
+/*ods html close;
+ods html;
+ods excel file="H:\Project\diapers\Export\BrandChoice_Store.xlsx" options(embedded_titles="yes");*/
+proc logistic data=brand_choice_store_features; 
+class brand (ref= 'HUGGIES');
+model brand = 
+/*wt_price_brand1 wt_price_brand2 wt_price_brand3 wt_price_brand4*/
+				disp_wt_brand1 disp_wt_brand2 disp_wt_brand3 disp_wt_brand4 
+				Feature_wt_brand1 Feature_wt_brand2 Feature_wt_brand3 Feature_wt_brand4
+				PR_wt_brand1 PR_wt_brand2 PR_wt_brand3 PR_wt_brand4
+				/ link = glogit expb clodds=PL; 
+run; 
+/*ods excel close;*/
+
+proc sql;
+create table panel_mdc as
+select
+a.panid, a.week, a.units, a.outlet, a.dollars, a.iri_key, a.L4, a.brand, a.vol_eq,
+case
+	when b.fam_size in (4,5,6) then 'large'
+	when b.fam_size in (1,2,3) then 'regular'
+	else 'other' end as fam_size,
+
+case
+	when b.pre_tax_inc in (1,2,3,4) then 'low'
+	when b.pre_tax_inc in (5,6,7,8) then 'medium'
+	when b.pre_tax_inc in (9,10,11) then 'high'
+	when b.pre_tax_inc in (12) then 'very_high'
+	else 'other' end as fam_income,
+
+case
+	when b.age_male_head in (1) then 'young'
+	when b.age_male_head in (2,3,4) then 'mid_career'
+	when b.age_male_head in (5,6) then 'elder'
+	else 'other' end as age_male,
+
+case
+	when b.age_Female_head in (1) then 'young'
+	when b.age_Female_head in (2,3,4) then 'mid_career'
+	when b.age_Female_head in (5,6) then 'elder'
+	else 'other' end as age_female,
+
+case
+	when b.edu_male_head in (1,2,3) then 'school'
+	when b.edu_male_head in (4,5,6) then 'college'
+	when b.edu_male_head in (7,8) then 'graduate'
+	else 'other' end as educ_male,
+
+case
+	when b.edu_Female_head in (1,2,3) then 'school'
+	when b.edu_Female_head in (4,5,6) then 'college'
+	when b.edu_Female_head in (7,8) then 'graduate'
+	else 'other' end as educ_female,
+
+/*b.OCC_male_head as occ_male,*/
+/*b.OCC_Female_head as occ_female,*/
+/*b.Male_work_hr as work_hr_male,*/
+/*b.Female_work_hr as work_hr_female,*/
+
+case
+	when b.Children_age_grp in (1,2,3) then 1
+	when b.Children_age_grp in (4,5,6) then 2
+	when b.Children_age_grp in (7) then 3
+	else 0 end as child_num,
+case 
+	when b.OCC_male_head in (1,2,3) then 'white_high'
+	when b.OCC_male_head in (4,5,6) then 'white_low'
+	when b.OCC_male_head in (7,8,9) then 'blue'
+	when b.OCC_male_head in (10,11,12) then 'no_occup'
+	else 'other' end as occu_male,
+case 
+	when b.OCC_Female_head in (1,2,3) then 'white_high'
+	when b.OCC_Female_head in (4,5,6) then 'white_low'
+	when b.OCC_Female_head in (7,8,9) then 'blue'
+	when b.OCC_Female_head in (10,11,12) then 'no_occup'
+	else 'other' end as occu_female,
+cats+dogs as pets_total
+from panel_diaper_details a
+inner join panel_details b 
+on a.panid = b.panid
+order by a.panid, a.week;
+quit;
+
+data panel_mdc1;
+set panel_mdc;
+if fam_income not in ('other');
+if age_male not in ('other');
+if age_female not in ('other');
+if educ_male not in ('other');
+if educ_female not in ('other');
+if occu_male not in ('other');
+if occu_female not in ('other');
+run;
+/*ods excel file="H:\Project\diapers\Export\BrandChoice_Demo2.xlsx" options(embedded_titles="yes");*/
+proc logistic data=panel_mdc1; 
+class brand (ref= 'HUGGIES') fam_size(ref='regular') fam_income(ref='low') age_male(ref='young') age_female(ref='young') educ_male(ref='school') educ_female(ref='school') child_num(ref='0') occu_male(ref='no_occup') occu_female(ref='no_occup');
+model brand = 
+fam_size fam_income age_male age_female educ_male educ_female child_num occu_male occu_female pets_total
+			  / link = glogit expb clodds=PL; 
+run; 
+/*ods excel close;*/

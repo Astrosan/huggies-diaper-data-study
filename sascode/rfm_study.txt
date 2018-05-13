@@ -1,0 +1,285 @@
+libname proj 'H:\Project\diapers';
+
+data panel_data_DR;
+infile 'H:\Project\diapers\diapers_PANEL_DR_1114_1165.dat' firstobs=2 expandtabs;
+input PANID	WEEK UNITS OUTLET $ DOLLARS IRI_KEY COLUPC;
+format COLUPC 13.;
+run;
+
+data panel_data_GR;
+infile 'H:\Project\diapers\diapers_PANEL_GR_1114_1165.dat' firstobs=2 expandtabs;
+input PANID	WEEK UNITS OUTLET $ DOLLARS IRI_KEY COLUPC;
+format COLUPC 13.;
+run;
+
+data panel_data_MA;
+infile 'H:\Project\diapers\diapers_PANEL_MA_1114_1165.dat' firstobs=2 expandtabs;
+input PANID	WEEK UNITS OUTLET $ DOLLARS IRI_KEY COLUPC;
+format COLUPC 13.;
+run;
+
+
+data panel_details;
+infile 'H:\Project\diapers\ads demo1.csv' firstobs=2 DLM=',' DSD MISSOVER;
+input PANID panel_churn pre_tax_inc fam_size HH_RACE Home_type COUNTY $ AGE EDU OCC 
+	  Age_Male_head EDU_male_head OCC_male_head Male_work_hr Male_smoke 
+	  Age_Female_head EDU_Female_head OCC_Female_head Female_work_hr Female_smoke
+	  Dogs Cats Children_age_grp Marital_Status Language TV Cable_TV Year HISP_FLAG
+      HISP_CAT Race2 RACE3 Microwave ZIPCODE FIPSCODE market_zipcode 
+	  IRI_Geo_num EXT_FACT;
+run;
+
+data all_panel_data;
+set panel_data_DR
+	panel_data_GR
+	panel_data_MA;
+run;
+
+
+	 proc sql;
+create table panel_diaper_details as
+select
+a.*,
+b.vol_eq,
+b.L4,
+case
+	when b.L5 in ('HUGGIES','HUGGIES BABY SHAPED','HUGGIES BABY STEPS','HUGGIES CONVERTIBLES','HUGGIES FOR HER','HUGGIES OVERNITES','HUGGIES SUPREME',
+				  'HUGGIES SUPREME BABY SHAPED','HUGGIES SUPREME GENTLE CARE','HUGGIES ULTRATRIM','HUGGIES ULTRATRIM BABY STEPS') then 'HUGGIES'
+	when b.L5 in ('LUVS','LUVS PHASES','LUVS STRETCH','LUVS ULTRA LEAKGUARDS','LUVS ULTRA LEAKGUARDS STRETCH') then 'LUVS'
+	when b.L5 in ('PAMPERS','PAMPERS BABY DRY','PAMPERS BABY DRY STRETCH','PAMPERS CRUISERS','PAMPERS PHASES','PAMPERS PREMIUM','PAMPERS RASH CARE',
+				  'PAMPERS RASH GUARD','PAMPERS STRETCH','PAMPERS SWADDLERS') then 'PAMPERS'
+	else 'OTHER' end as brand
+from all_panel_data a
+inner join diaper_detail b on a.COLUPC = b.COLUPC
+where b.PRODUCT_TYPE = 'DISPOSABLE DIAPER' and b.L4='KIMBERLY CLARK CORP';
+quit;
+proc sql;
+create table pre_rfm as
+Select panid
+	   ,sum(dollars) as monetary
+	   ,count(week) as freq
+	   ,min(1165-week) as weekcnt
+from panel_diaper_details
+group by 1;
+quit;
+
+proc corr data=pre_rfm;
+var monetary freq weekcnt;
+run;
+
+%macro RFM_quintiles(panel_diaper_details);
+
+proc sql;
+create table rfm_prep_data as
+select 
+	panid,
+	1 as id,
+	sum(dollars) as monetary,
+	count(week) as freq,
+	min(1165-week) as weekcnt
+from &panel_diaper_details.
+group by 1,2;
+quit;
+
+proc means data=rfm_prep_data min p20 p40 p60 p80 max;
+var monetary freq weekcnt;
+output out=rfm_percentiles min= p20= p40= p60= p80= max=/ autoname;
+run;
+
+data rfm_percentiles;
+set rfm_percentiles;
+id = 1;
+run;
+
+proc sql;
+create table rfm_details as
+select a.*, b.*
+from rfm_prep_data a
+inner join rfm_percentiles b on a.id =b.id;
+quit;
+
+data rfm_score(keep= PANID monetary monetary_score freq frequency_score weekcnt recency_score tot_RFM);
+set rfm_details;
+IF (monetary > monetary_P80) THEN monetary_score=5;
+ELSE IF (monetary > monetary_P60 and monetary <= monetary_P80) THEN monetary_score=4;
+ELSE IF (monetary > monetary_P40 and monetary <= monetary_P60) THEN monetary_score=3;
+ELSE IF (monetary > monetary_P40 and monetary <= monetary_P60) THEN monetary_score=2;
+ELSE monetary_score=1;
+
+IF (freq > freq_P80) THEN frequency_score=5;
+ELSE IF (freq > freq_P60 and freq <= freq_P80) THEN frequency_score=4;
+ELSE IF (freq > freq_P40 and freq <= freq_P60) THEN frequency_score=3;
+ELSE IF (freq > freq_P20 and freq <= freq_P40) THEN frequency_score=2;
+ELSE frequency_score=1;
+
+IF (weekcnt > weekcnt_P80) THEN recency_score=1;
+ELSE IF (weekcnt > weekcnt_P60 and weekcnt <= weekcnt_P80) THEN recency_score=2;
+ELSE IF (weekcnt > weekcnt_P40 and weekcnt <= weekcnt_P60) THEN recency_score=3;
+ELSE IF (weekcnt > weekcnt_P20 and weekcnt <= weekcnt_P40) THEN recency_score=4;
+ELSE recency_score=5;
+
+/*tot_RFM=CAT(recency_score,frequency_score,monetary_score);*/
+RUN;
+
+proc fastclus data=rfm_score maxc=3 maxiter=10 out=clus;
+var monetary freq weekcnt;
+RUN;
+%mend;
+
+
+/* Macro */
+%RFM_quintiles(panel_diaper_details);
+
+proc corr data=rfm_score;
+var recency_score frequency_score monetary_score;
+run;
+
+
+data cust_demographic;
+set panel_details(keep=PANID pre_tax_inc fam_size Home_type Age_Male_head EDU_male_head OCC_male_head Male_work_hr  Age_Female_head EDU_Female_head OCC_Female_head Female_work_hr Dogs Cats Children_age_grp Marital_Status TV Cable_TV);
+RUN;
+
+proc sql;
+create table cust_desc as
+select
+b.panid, 
+case
+	when b.fam_size in (4,5,6) then 'large'
+	when b.fam_size in (1,2,3) then 'regular'
+	else 'other' end as fam_size,
+
+case
+	when b.pre_tax_inc in (1,2,3,4) then 'low'
+	when b.pre_tax_inc in (5,6,7,8) then 'medium'
+	when b.pre_tax_inc in (9,10,11) then 'high'
+	when b.pre_tax_inc in (12) then 'very_high'
+	else 'other' end as fam_income,
+
+case
+	when b.age_male_head in (1) then 'young'
+	when b.age_male_head in (2,3,4) then 'mid_career'
+	when b.age_male_head in (5,6) then 'elder'
+	else 'other' end as age_male,
+
+case
+	when b.age_Female_head in (1) then 'young'
+	when b.age_Female_head in (2,3,4) then 'mid_career'
+	when b.age_Female_head in (5,6) then 'elder'
+	else 'other' end as age_female,
+
+case
+	when b.edu_male_head in (1,2,3) then 'school'
+	when b.edu_male_head in (4,5,6) then 'college'
+	when b.edu_male_head in (7,8) then 'graduate'
+	else 'other' end as educ_male,
+
+case
+	when b.edu_Female_head in (1,2,3) then 'school'
+	when b.edu_Female_head in (4,5,6) then 'college'
+	when b.edu_Female_head in (7,8) then 'graduate'
+	else 'other' end as educ_female,
+case
+	when b.Children_age_grp in (1,2,3) then 1
+	when b.Children_age_grp in (4,5,6) then 2
+	when b.Children_age_grp in (7) then 3
+	else 0 end as child_num,
+case 
+	when b.OCC_male_head in (1,2,3) then 'white_high'
+	when b.OCC_male_head in (4,5,6) then 'white_low'
+	when b.OCC_male_head in (7,8,9) then 'blue'
+	when b.OCC_male_head in (10,11,12) then 'no_occup'
+	else 'other' end as occu_male,
+case 
+	when b.OCC_Female_head in (1,2,3) then 'white_high'
+	when b.OCC_Female_head in (4,5,6) then 'white_low'
+	when b.OCC_Female_head in (7,8,9) then 'blue'
+	when b.OCC_Female_head in (10,11,12) then 'no_occup'
+	else 'other' end as occu_female,
+cats+dogs as pets_total
+from panel_details b 
+order by b.panid;
+quit;
+
+/* Variables for Demographic Study */
+data cust_desc2;
+set cust_desc;
+IF fam_size='large' THEN fam_size_L=1 ; ELSE fam_size_L=0;
+IF fam_size='regular' THEN fam_size_R=1 ; ELSE fam_size_R=0;
+IF fam_size='other' THEN fam_size_O=1 ; ELSE fam_size_O=0;
+IF fam_income="low" THEN fam_income_L=1 ; ELSE fam_income_L=0;
+IF fam_income="medium" THEN fam_income_M=1 ; ELSE fam_income_M=0;
+IF fam_income="high" THEN fam_income_H=1 ; ELSE fam_income_H=0;
+IF fam_income="very_high" THEN fam_income_VH=1 ; ELSE fam_income_VH=0;
+IF fam_income="other" THEN fam_income_O=1 ; ELSE fam_income_O=0;
+IF age_male="young" THEN age_mY=1 ; ELSE age_mY=0;
+IF age_male="mid_career" THEN age_mM=1 ; ELSE age_mM=0;
+IF age_male="elder" THEN age_mE=1 ; ELSE age_mE=0;
+IF age_male="other" THEN age_mO=1 ; ELSE age_mO=0;
+IF age_female="young" THEN age_fY=1 ; ELSE age_fY=0;
+IF age_female="mid_career" THEN age_fM=1 ; ELSE age_fM=0;
+IF age_female="elder" THEN age_fE=1 ; ELSE age_fE=0;
+IF age_female="other" THEN age_fO=1 ; ELSE age_fO=0;
+IF educ_male="school" THEN educ_mS=1 ; ELSE educ_mS=0;
+IF educ_male="college" THEN educ_mC=1 ; ELSE educ_mC=0;
+IF educ_male="other" THEN educ_mO=1 ; ELSE educ_mO=0;
+IF educ_male="graduate" THEN educ_mG=1 ; ELSE educ_mG=0;
+
+IF educ_female="school" THEN educ_fS=1 ; ELSE educ_fS=0;
+IF educ_female="college" THEN educ_fC=1 ; ELSE educ_fC=0;
+IF educ_female="graduate" THEN educ_mG=1 ; ELSE educ_mG=0;
+IF educ_female="other" THEN educ_fO=1 ; ELSE educ_fO=0;
+IF occu_male="white_high" THEN occ_mWH=1; ELSE occ_mWH=0;
+IF occu_male="white_low" THEN occ_mWL=1; ELSE occ_mWL=0;
+IF occu_male="blue" THEN occ_mB=1; ELSE occ_mB=0;
+IF occu_male="no_occup" THEN occ_mNO=1; ELSE occ_mNO=0;
+
+IF occu_female="white_high" THEN occ_fWH=1; ELSE occ_fWH=0;
+IF occu_female="white_low" THEN occ_fWL=1; ELSE occ_fWL=0;
+IF occu_female="blue" THEN occ_fB=1; ELSE occ_fB=0;
+IF occu_female="no_occup" THEN occ_fNO=1; ELSE occ_fNO=0;
+IF child_num=1 THEN one_child=1; ELSE one_child=0;
+IF child_num=2 THEN two_child=1; ELSE two_child=0;
+IF child_num=3 THEN three_child=1; ELSE three_child=0;
+IF child_num=0 THEN zero_child=1; ELSE zero_child=0;
+RUN;
+
+/****** TOP AND BOTTOM CUSTOMER *****/
+proc sql;
+create table top_cust as
+select
+a.*,c.*
+from rfm_score a
+inner join cust_desc2 c on a.PANID = c.PANID
+where a.monetary_score in (5,4);
+quit;
+
+proc sql;
+create table bottom_cust as
+select
+a.*,c.*
+from rfm_score a
+inner join cust_desc2 c on a.PANID = c.PANID
+where a.monetary_score in (2,1);
+quit;
+
+proc corr data=rfm_score;
+var recency_score frequency_score monetary_score;
+run;
+proc means data=top_cust;run;
+proc means data=bottom_cust;run;
+
+
+/*** Loyal and Promotions Group */
+proc sql;
+create table loyal_group as
+select a.*,b.* from rfm_score a 
+inner join cust_desc2 b on a.panid=b.panid
+where a.monetary_score in (5,4) and a.recency_score in (5,4);quit;
+
+proc sql;
+create table promotions_group as
+select a.*,b.* from rfm_score a 
+inner join cust_demographic b on a.panid=b.panid
+where a.monetary_score in (1,2) and a.recency_score in (5,4);quit;
+
+/*---------------------------------------------------------------------------------------------------------------------------------*/
